@@ -1,0 +1,89 @@
+/***************************************************************************************************
+Name        : AdvancedJobMatching_Test 
+Created By  : Steve Shrader - Revelant Technologies
+Email       : steve.shrader@revelanttech.com
+Created Date: 4/27/2018
+Description : test for AdvancedJobMatching
+Changes     : 
+******************************************************************************************************/
+@isTest
+private class AdvancedJobMatching_Test {
+    static testMethod void test_accountHappyPath() {
+        insert new Launchpad__Matching_Criteria__c(Name = 'Personal Car', Launchpad__Active__c = true, Launchpad__Contact_Field_API_Name__c = 'Personal_Car__c', Launchpad__Job_Field_API_Name__c = 'Personal_Car_Required__c');
+        insert new Launchpad_Configuration__c(Job_Matching_Contact_Keyword_Fields__c = 'Name', Job_Matching_Job_Keyword_Fields__c = 'Name');
+
+        Account a = new Account(Name='Account X');
+        insert a;
+        
+        Contact c = new Contact(Lastname='Contact Y');
+        c.RecordTypeId = Schema.SObjectType.Contact.getRecordTypeInfosByName().get('Job Seeker').getRecordTypeId();
+        c.AccountId = a.Id;
+        c.Email = 'test@test.com';
+        insert c;
+        
+        Launchpad__Job__c j = new Launchpad__Job__c(Name='Job Z', Launchpad__Account__c=a.Id);
+        insert j;
+        
+        Launchpad__Skill1__c skill = new Launchpad__Skill1__c(Name='Skill 1');
+        insert skill;
+        
+        Launchpad__Client_Skill__c cSkill = new Launchpad__Client_Skill__c();
+		cSkill.Launchpad__Skill1__c = skill.Id;
+		cSkill.Launchpad__Client__c = c.Id;
+        insert cSkill;
+        
+        Launchpad__JobSkill__c jSkill = new Launchpad__JobSkill__c();
+       	jSkill.Launchpad__Skill1__c = skill.Id;
+		jSkill.Launchpad__Job__c = j.Id;
+        insert jSkill;
+        
+        AdvancedJobMatchingController controller = new AdvancedJobMatchingController();
+        
+        controller.selectedContactId = c.Id;
+        controller.keywordSearchTerms = 'Z';
+        controller.selectContactToMatch();
+        controller.search();
+        
+		controller.selectedContactId = null;
+        controller.selectedJobId = j.Id;
+        controller.selectJobToMatch();
+        controller.search();
+        
+        List<SelectOption> contactsList = controller.contactsList;
+        List<SelectOption> jobsList = controller.jobsList;
+        List<SelectOption> skillsList = controller.skillsList;
+        List<SelectOption> sortColumnList = controller.sortColumnList;        
+            
+        System.assertEquals(1, controller.matches.size());
+        controller.matches[0].isSelected = true;
+        controller.addMatches();
+        
+        controller.sortColumn = 'Launchpad__Match__c';
+        controller.sortTable();
+        controller.sortTable();
+        
+        controller.refreshFilter();
+        
+        controller.distanceFilter = 50;
+        controller.search();
+    }
+    
+    static testMethod void test_sortingMatches() {
+        List<AdvancedJobMatchingController.SortableMatch> matches = new List<AdvancedJobMatchingController.SortableMatch>();
+        
+        AdvancedJobMatchingController.SortableMatch match1 = new AdvancedJobMatchingController.SortableMatch(new Launchpad__Match__c(Contact_Name__c = 'A', Job_Name__c = 'B', Launchpad__Distance_Numeric__c = 5));
+        AdvancedJobMatchingController.SortableMatch match2 = new AdvancedJobMatchingController.SortableMatch(new Launchpad__Match__c(Contact_Name__c = 'B', Job_Name__c = 'A', Launchpad__Distance_Numeric__c = 10));
+        
+        match1.sortColumn = 'Contact_Name__c';
+        match2.sortColumn = 'Contact_Name__c';
+        
+        System.assertEquals(-1, match1.compareTo(match2));	//A is less than B
+        System.assertEquals(1, match2.compareTo(match1));	//B is greater than A
+        
+        match1.sortColumn = 'Launchpad__Distance_Numeric__c';
+        match2.sortColumn = 'Launchpad__Distance_Numeric__c';
+        
+        System.assertEquals(-1, match1.compareTo(match2));	//5 is less than 10
+        System.assertEquals(1, match2.compareTo(match1));	//10 is greater than 5        
+    }
+}
