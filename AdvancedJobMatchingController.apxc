@@ -1,0 +1,945 @@
+/***************************************************************************************************
+Name        : AdvancedJobMatchingController 
+Created By  : Steve Shrader - Revelant Technologies
+Email       : steve.shrader@revelanttech.com
+Created Date: 4/2/2018
+Description : Allow Job Matching real time matching from a search page by listing search criteria, skills and distances
+				for a user to modify.  Return full list of matches in a sortable form and allow users to manually select
+				matches to create for the Contact or Job.
+			  Advanced Matching works by selecting a Contact and searching for matching Jobs or selecting a Job and searching for matching Contacts
+Changes     : 
+******************************************************************************************************/
+public without sharing class AdvancedJobMatchingController {
+    public SObject objectToMatch {get;set;}	//will be cast to either Contact or Launchpad__Job__c depending on params or vf page selection
+    public Boolean allowObjectToMatchSelection {get;set;}	//if contactId or jobId param is passed when the vf page is initially called that will load the objectToMatch and it cannot be changed...if not a SelectList will allow the user to pick the Contact or Job to match against
+    public String selectedContactId {get;set;}
+    public String selectedJobId {get;set;}
+    public String backgroundColor {get;set;}
+    public Boolean contactSearch {get;set;}	//track if the search is for matching Contacts
+    public Boolean jobSearch {get;set;}	//or if the search is for matching Jobs
+            
+    //the SObject to Match against can be passed as the contactId or jobId param when the vf page is called
+    //	and the user will not be able to change the objectToMatch.  If no params are passed the user will
+    //	have selectOptions to pick the Contact or Job to use as the objectToMatch
+    public AdvancedJobMatchingController() {
+        debugVisualforce = 'true'.equalsIgnoreCase(ApexPages.currentPage().getParameters().get('debugVisualforce'));       
+		debugLog = 'true'.equalsIgnoreCase(ApexPages.currentPage().getParameters().get('debugLog'));
+        selectedContactId = ApexPages.currentPage().getParameters().get('contactId');
+        selectedJobId = ApexPages.currentPage().getParameters().get('jobId');
+        
+		Launchpad_Configuration__c launchpadConfiguration = Launchpad_Configuration__c.getInstance();
+		if(String.isNotBlank(launchpadConfiguration.Visualforce_Background_Color__c)) {
+            backgroundColor = launchpadConfiguration.Visualforce_Background_Color__c;
+        }
+        else {
+        	backgroundColor = '#882844';
+        }
+
+        if(String.isNotBlank(Network.getNetworkId())) {	//this is a Community User...find their Contact Id and use that
+			Id userId = UserInfo.getUserId();
+            User u = [SELECT Id, contactId FROM User WHERE Id = : userId];
+			selectedContactId = u.contactId;
+        }
+        
+        if(String.isNotBlank(selectedContactId) || String.isNotBlank(selectedJobId)) {
+            allowObjectToMatchSelection = false;	//if id was passed in don't allow the user to select a different one
+            selectObjectToMatch();
+        }
+        else {
+            allowObjectToMatchSelection = true;	//if id was not passed in allow the user to select the object to match against
+        }
+   	}
+
+    public List<CriteriaFieldWrapper> criteriaFieldWrapperList {get;set;}
+    public void selectContactToMatch() {
+        selectedJobId = null;
+        selectObjectToMatch();
+    }
+    public void selectJobToMatch() {
+        selectedContactId = null;
+        selectObjectToMatch();
+    }
+    private void selectObjectToMatch() {
+        //reset related lists
+        skillsSelected = null;
+        matches = null;
+        
+        if(String.isNotBlank(selectedContactId)) {
+            objectToMatch = new Contact();
+            try {
+                //get the List of fields from our custom setting
+                Map<String, Schema.SObjectField> contactFields = Schema.getGlobalDescribe().get('Contact').getDescribe().fields.getMap();
+                criteriaFieldWrapperList = new List<CriteriaFieldWrapper>();
+                for(Launchpad__Matching_Criteria__c lmc : Launchpad__Matching_Criteria__c.getall().values()) {                         
+                    Schema.SObjectField sof = contactFields.get(lmc.Launchpad__Contact_Field_API_Name__c);
+                    if(sof != null) {
+                        criteriaFieldWrapperList.add(new CriteriaFieldWrapper(sof.getDescribe().getName(), sof.getDescribe().getLabel(), String.valueOf(sof.getDescribe().getType())));
+                    }
+                }
+                
+                Set<String> contactFieldsToRetrieve = new Set<String>{'Id', 'Name', 'Launchpad__Geo_Location__Latitude__s', 'Launchpad__Geo_Location__Longitude__s'};
+                contactFieldsToRetrieve.addAll(contactCriteriaFields);
+                
+                String query = 'SELECT ';
+                for(String fieldName : contactFieldsToRetrieve) {
+                    query = query + fieldName + ', ';
+                }
+                query = query.removeEnd(', ');
+                query = query + ' FROM Contact WHERE id = :selectedContactId';
+    			debug('query:'+query);
+                objectToMatch = (Contact)Database.query(query);
+            }
+            catch(Exception e) {
+                debug(e);
+            }
+        }
+        else if(String.isNotBlank(selectedJobId)) {
+	        objectToMatch = new Launchpad__Job__c();
+    	    try {
+        	    //get the List of fields from our custom setting
+            	Map<String, Schema.SObjectField> jobFields = Schema.getGlobalDescribe().get('Launchpad__Job__c').getDescribe().fields.getMap();
+            	criteriaFieldWrapperList = new List<CriteriaFieldWrapper>();
+                for(Launchpad__Matching_Criteria__c lmc : Launchpad__Matching_Criteria__c.getall().values()) {                         
+                    Schema.SObjectField sof = jobFields.get(lmc.Launchpad__Job_Field_API_Name__c);
+                    if(sof != null) {
+                        criteriaFieldWrapperList.add(new CriteriaFieldWrapper(sof.getDescribe().getName(), sof.getDescribe().getLabel(), String.valueOf(sof.getDescribe().getType())));
+                    }
+                }
+            
+                Set<String> jobFieldsToRetrieve = new Set<String>{'Id', 'Name', 'Launchpad__Geo_Location__Latitude__s', 'Launchpad__Geo_Location__Longitude__s'};
+                jobFieldsToRetrieve.addAll(jobCriteriaFields);
+                
+                String query = 'SELECT ';
+                for(String fieldName : jobFieldsToRetrieve) {
+                    query = query + fieldName + ', ';
+                }
+                query = query.removeEnd(', ');
+                query = query + ' FROM Launchpad__Job__c WHERE id = :selectedJobId';
+    			debug('query:'+query);
+                objectToMatch = (Launchpad__Job__c)Database.query(query);
+            }
+            catch(Exception e) {
+                debug(e);
+            }
+        }
+        else {
+            notify('Select a Contact or Job to match against');
+        }
+    }
+
+    //allow input of keywords and search with SOSL
+    public String keywordSearchTerms {get;set;}
+    
+    public void search() {
+        debug('skillsSelected:'+String.valueOf(skillsSelected));
+        List<Launchpad__Match__c> foundMatches = new List<Launchpad__Match__c>();
+        if(objectToMatch != null && objectToMatch instanceOf Contact) {
+            notify('Searching for matching Jobs'); jobSearch = true; contactSearch = false;
+        	foundMatches = matchJobs((Contact)objectToMatch, skillsSelected, distanceFilter, filterOutEmptyDistances);
+        }
+        else if(objectToMatch != null && objectToMatch instanceOf Launchpad__Job__c) {
+            notify('Searching for matching Contacts'); contactSearch = true; jobSearch = false;
+            foundMatches = matchContacts((Launchpad__Job__c)objectToMatch, skillsSelected, distanceFilter, filterOutEmptyDistances);
+        }
+        
+        matches = new List<SortableMatch>();
+        for(Launchpad__Match__c foundMatch : foundMatches) {
+            matches.add(new SortableMatch(foundMatch));
+        }
+        
+        matches.sort();
+        
+        debug('matches:'+String.valueOf(matches));
+        debug('Schema.getGlobalDescribe().get(\'Launchpad__Match__c\').getDescribe().fields.getMap():'+Schema.getGlobalDescribe().get('Launchpad__Match__c').getDescribe().fields.getMap());
+        debug('Schema.getGlobalDescribe().get(\'Launchpad__Match__c\').getDescribe().fields.getMap().get(\'Launchpad__Match__c\').getDescribe().getType():'+Schema.getGlobalDescribe().get('Launchpad__Match__c').getDescribe().fields.getMap().get('Launchpad__Match__c').getDescribe().getType());
+    }
+
+    public void addMatches() {
+        if(matches != null) {
+            List<Launchpad__Match__c> matchesToInsert = new List<Launchpad__Match__c>();
+            for(SortableMatch match : matches) {
+                debug('isSelected:'+match.isSelected+', match:'+String.valueOf(match));
+                if(match.isSelected) {
+                    matchesToInsert.add(match.match);
+                }
+            }
+            insert matchesToInsert;
+            
+            notify('saved ' + matchesToInsert.size() + ' matches');
+        }
+    }
+    
+    public class SortableMatch implements Comparable {
+        public Launchpad__Match__c match {get;set;}
+        public Boolean isSelected {get;set;}
+        public String sortColumn {get;set;}
+        public Boolean sortAsc {get;set;}
+        
+        // Constructor
+        public SortableMatch(Launchpad__Match__c m) {
+            match = m;
+            sortColumn = 'Contact_Name__c';
+            sortAsc = true;
+        }
+
+        // Compare matches based on the Client name amount.
+    	public Integer compareTo(Object compareTo) {
+            try {
+				SortableMatch compareToMatch = (SortableMatch)compareTo;
+
+                Schema.DisplayType fieldType = Schema.getGlobalDescribe().get('Launchpad__Match__c').getDescribe().fields.getMap().get(sortColumn).getDescribe().getType();
+                if(Schema.DisplayType.DOUBLE == fieldType || Schema.DisplayType.PERCENT == fieldType) {
+                    if(match.get(sortColumn) == null) {
+                        return 1;	//always put null at bottom of list
+                    }
+                    else if(compareToMatch.match.get(sortColumn) == null) {
+                        return -1;	//always put null at bottom of list
+                    }
+                    else if((Double)match.get(sortColumn) > (Double)compareToMatch.match.get(sortColumn)) {
+                        return 1 * (sortAsc ? 1 : -1);
+                    }
+                    else if((Double)match.get(sortColumn) < (Double)compareToMatch.match.get(sortColumn)) {
+                        return -1 * (sortAsc ? 1 : -1);
+                    }
+                    return 0;
+                }
+                else {
+                    if(String.valueOf(match.get(sortColumn)) > String.valueOf(compareToMatch.match.get(sortColumn))) {
+                        return 1 * (sortAsc ? 1 : -1);
+                    }
+                    else if(String.valueOf(match.get(sortColumn)) < String.valueOf(compareToMatch.match.get(sortColumn))) {
+                        return -1 * (sortAsc ? 1 : -1);
+                    }
+                    return 0;
+                }
+			}
+            catch(Exception e) {
+                System.debug(e);
+            }
+            return 0;
+		}
+    }
+    
+    public List<SelectOption> sortColumnList {
+        get {
+            List<SelectOption> sortColumnList = new List<SelectOption>();
+            if(contactSearch == true) {
+                sortColumnList.add(new SelectOption('Contact_Name__c', 'Name'));
+            }
+            if(jobSearch == true) {
+                sortColumnList.add(new SelectOption('Job_Name__c', 'Name'));
+            }
+            sortColumnList.add(new SelectOption('Launchpad__Match__c', 'Skills'));
+            sortColumnList.add(new SelectOption('Launchpad__Match_Criteria__c', 'Criteria'));
+            sortColumnList.add(new SelectOption('Match_Keywords__c', 'Keyword'));
+            sortColumnList.add(new SelectOption('Launchpad__Distance_Numeric__c', 'Distance'));
+			return sortColumnList;
+        }
+        set;
+    }    
+    public String sortColumn {get;set;}
+    public void sortTable() {
+        for(SortableMatch m : matches) {
+            if(m.sortColumn == sortColumn) {	//column to sort was not changed so toggle sort order of that column
+                m.sortAsc = !m.sortAsc;
+            }
+            else {
+            	m.sortColumn = sortColumn;
+                m.sortAsc = true;
+            }
+        }
+        matches.sort();
+    }
+
+    //filter the contactsList and JobsList by Names if a filter string is input
+	public String contactsListFilter {get;set;}
+    public String jobsListFilter {get;set;}
+    public String skillsListFilter {get;set;}
+    public void refreshFilter() {
+        contactsList = null;
+        jobsList = null;
+        skillsList = null;
+    }
+    private List<SelectOption> getSelectOptionList(String objectToQuery, String filter) {
+        List<SelectOption> selectOptions = new List<SelectOption>();
+
+        try {
+            String query = 'SELECT Id, Name FROM ' + objectToQuery;
+            
+            if(String.isNotBlank(filter)) {
+                filter = '%' + String.escapeSingleQuotes(filter) + '%';
+                query += ' WHERE Name LIKE :filter';
+            }
+            
+            if('Launchpad__Job__c'.equals(objectToQuery)) {	//only list Jobs with more than 0 openings
+                query += query.contains('WHERE') ? ' AND' : ' WHERE';
+                query += ' Launchpad__Openings__c > 0';
+            }
+            
+            query += ' ORDER BY Name LIMIT 500';
+            
+            List<SObject> sObjectList = Database.query(query);
+            
+            selectOptions.add(new SelectOption('', '-- Select --'));
+            for(SObject s : sObjectList) {
+                selectOptions.add(new SelectOption((String)s.get('Id'), (String)s.get('Name')));
+            }
+        }
+        catch(Exception e) {
+            debug(e);
+        }
+        
+        return selectOptions;
+    }
+    public List<SelectOption> contactsList {
+        get {
+            if(contactsList == null) {
+                contactsList = getSelectOptionList('Contact', contactsListFilter);
+            }
+            return contactsList;
+        }
+        set;
+    }
+    public List<SelectOption> jobsList {
+        get {
+            if(jobsList == null) {
+                jobsList = getSelectOptionList('Launchpad__Job__c', jobsListFilter);
+            }
+            return jobsList;
+        }
+        set;
+    }
+    public List<SelectOption> skillsList {
+        get {
+            if(skillsList == null) {
+                skillsList = getSelectOptionList('Launchpad__Skill1__c', skillsListFilter);
+            }
+            return skillsList;
+        }
+        set;
+    }
+    public List<String> skillsSelected {
+        get {
+			if(skillsSelected == null && objectToMatch != null && objectToMatch.Id != null) {
+                skillsSelected = new List<String>();
+                if(objectToMatch != null && objectToMatch instanceOf Contact) {
+                    List<Launchpad__Client_Skill__c> clientSkills = [SELECT Launchpad__Skill1__c FROM Launchpad__Client_Skill__c WHERE Launchpad__Client__c = :objectToMatch.Id];
+                    for(Launchpad__Client_Skill__c clientSkill : clientSkills) {
+                        skillsSelected.add(String.valueOf(clientSkill.Launchpad__Skill1__c));
+                    }
+                }
+                else if(objectToMatch != null && objectToMatch instanceOf Launchpad__Job__c) {
+                    List<Launchpad__JobSkill__c> jobSkills = [SELECT Launchpad__Skill1__c FROM Launchpad__JobSkill__c WHERE Launchpad__Job__c = :objectToMatch.Id];
+                    for(Launchpad__JobSkill__c jobSkill : jobSkills) {
+                        skillsSelected.add(String.valueOf(jobSkill.Launchpad__Skill1__c));
+                    }                    
+                }
+            }
+            return skillsSelected;
+        }
+        set;
+    }
+    
+    public Integer distanceFilter {get;set;}
+    public Boolean enableLocationFilterByContact {get;set;}
+    public Boolean filterOutEmptyDistances {get;set;}	//if a Distance cannot be calculated don't return the result
+    private Boolean useContactDistanceMatchPatch {get;set;}	//SOQL cannot dynamically compare DISTANCE to the Contact.Launchpad__Distance_Can_Travel_Formula__c field so filter out results
+    private Map<Id, Decimal> criteriaPercentageMatchMap {get;set;}
+    private Map<Id, Decimal> keywordsPercentageMatchMap {get;set;}
+    
+    public List<SortableMatch> matches {get;set;}
+    
+    public class CriteriaFieldWrapper {
+        public String fieldName {get;set;}
+        public String fieldLabel {get;set;}
+        public String fieldType {get;set;}
+        CriteriaFieldWrapper(String n, String l, String t) {
+            fieldName = n;
+            fieldLabel = l;
+            fieldType = t;
+        }
+    }
+    
+    private Set<String> contactCriteriaFields {
+        get {
+            if(contactCriteriaFields == null) {
+                contactCriteriaFields = new Set<String>();
+                Map<String, Schema.SObjectField> contactFields = Schema.getGlobalDescribe().get('Contact').getDescribe().fields.getMap();
+            	for(Launchpad__Matching_Criteria__c lmc : [SELECT Id, Launchpad__Contact_Field_API_Name__c, Launchpad__Job_Field_API_Name__c FROM Launchpad__Matching_Criteria__c WHERE Launchpad__Active__c = true]) {
+                	Schema.SObjectField sof = contactFields.get(lmc.Launchpad__Contact_Field_API_Name__c);
+                	if(sof != null) {
+                    	contactCriteriaFields.add(lmc.Launchpad__Contact_Field_API_Name__c);
+                	}
+                	else {
+                    	notify('Criteria field specified for Contact does not exist on the object:'+lmc.Launchpad__Contact_Field_API_Name__c);
+                	}
+            	}
+            }
+            return contactCriteriaFields;
+        }
+        set;
+    }
+    private Set<String> jobCriteriaFields {
+        get {
+            if(jobCriteriaFields == null) {
+                jobCriteriaFields = new Set<String>();
+                Map<String, Schema.SObjectField> jobFields = Schema.getGlobalDescribe().get('Launchpad__Job__c').getDescribe().fields.getMap();
+            	for(Launchpad__Matching_Criteria__c lmc : [SELECT Id, Launchpad__Contact_Field_API_Name__c, Launchpad__Job_Field_API_Name__c FROM Launchpad__Matching_Criteria__c WHERE Launchpad__Active__c = true]) {
+                	Schema.SObjectField sof = jobFields.get(lmc.Launchpad__Job_Field_API_Name__c);
+                	if(sof != null) {
+                    	jobCriteriaFields.add(lmc.Launchpad__Job_Field_API_Name__c);
+                	}
+                	else {
+                    	notify('Criteria field specified for Job does not exist on the object:'+lmc.Launchpad__Job_Field_API_Name__c);
+                	}
+            	}            
+        	}
+            return jobCriteriaFields;
+        }
+        set;
+    }
+    
+    //search for Jobs that match the Client param
+    //	contactSkillIds is a List of Ids for Launchpad__Skill1__c to that a Contact has
+    private List<Launchpad__Match__c> matchJobs(Contact p, List<String> contactSkillIds, Integer radius, Boolean filterEmptyDistances) {
+        List<Id> alreadyMatched = new List<Id>();	//list of matches that this Contact already has...don't display duplicates
+        for(Launchpad__Match__c m : [SELECT Launchpad__Job__c FROM Launchpad__Match__c WHERE Launchpad__Client__c = :p.Id]) {
+            //alreadyMatched.add(m.Launchpad__Job__c);
+        }
+        
+        //	Create a SOQL SELECT to get Contact information matching the Job...we are matching on Skills or Criteria so to avoid
+        //		MALFORMED_QUERY: Semi join sub-selects are only allowed at the top level WHERE expressions and not in nested WHERE expressions.
+        //		with a SELECT * WHERE 1 AND (skills OR criteria) 
+        //		convert into the logically equivalent
+        //		SELECT * WHERE (1 AND skills) OR (1 AND criteria)
+        //		avoid duplicate field Query by using a Set
+        Set<String> fieldsToQuery = new Set<String>{'Id', 'Name', 'Launchpad__Geo_Location__Latitude__s', 'Launchpad__Geo_Location__Longitude__s', 'Launchpad__Hourly_Wage_Maximum__c',
+                                                    'Launchpad__Education_Required__c', '(SELECT Launchpad__Skill1__r.Name FROM Launchpad__JobSkills__r)'};
+        fieldsToQuery.addAll(jobCriteriaFields);	//use the Custom Settings in Matching Criteria to expand on the Skill Matching and also query those fields
+        fieldsToQuery.addAll(matchingKeywordFields('Launchpad__Job__c'));	//add fields for Keyword Matching
+        
+        String querySelect = '';
+		for(String s : fieldsToQuery) {
+			querySelect += (querySelect == '' ? '' : ', ' ) + s;
+        }
+
+		//queryWhere1 is the standard limiting query used by Skills and Criteria
+        String queryWhere1 = 'Launchpad__Stage__c != \'Placement\' AND Launchpad__Stage__c != \'Closed/Lost\' AND Id != :alreadyMatched AND ' +
+                             'Id NOT IN (SELECT Launchpad__Job_Order__c FROM Launchpad__Applicant_Tracking__c WHERE Launchpad__Participant__c =: objectToMatchId)';
+        
+        //also add Distance Filter to 1 if applicable
+        List<String> distanceFilter = createQueryDistanceFilter(p, radius, filterEmptyDistances);
+        querySelect += distanceFilter[0];
+        queryWhere1 += distanceFilter[1];
+        String queryOrderBy = distanceFilter[2];
+
+        //add Skills Matching by searching for Ids in a list of Skills on the Job passed in
+        String queryWhereSkills = 'Id IN (SELECT Launchpad__Job__c FROM Launchpad__JobSkill__c WHERE Launchpad__Skill1__c = :skillIds)';
+        
+        //use the Custom Settings in Matching Criteria to expand on the Skill Matching
+        String queryWhereCriteria = createQueryWhereCriteria(p);
+        
+        //keyword search very similar to Criteria
+        String queryWhereKeywords = createQueryWhereKeywords('Launchpad__Job__c');
+        
+        return executeMatchQuery('Launchpad__Job__c', (SObject)p, p.id, alreadyMatched, contactSkillIds, querySelect, queryWhere1, queryWhereSkills, queryWhereCriteria, queryWhereKeywords, queryOrderBy);
+    }
+    
+    //for a specified Job match all Contacts with overlapping skills
+    //	skills is a List of Ids for Launchpad__Skill1__c to match
+    private List<Launchpad__Match__c> matchContacts(Launchpad__Job__c jo, List<String> jobSkillIds, Integer radius, Boolean filterEmptyDistances) {
+        List<Id> alreadyMatched = new List<Id>();
+        for(Launchpad__Match__c m : [SELECT Launchpad__Client__c FROM Launchpad__Match__c WHERE Launchpad__Job__c = :jo.Id]) {
+            //alreadyMatched.add(m.Launchpad__Client__c);
+        }
+        
+        //	Create a SOQL SELECT to get Contact information matching the Job...we are matching on Skills or Criteria so to avoid
+        //		MALFORMED_QUERY: Semi join sub-selects are only allowed at the top level WHERE expressions and not in nested WHERE expressions.
+        //		with a SELECT * WHERE 1 AND (skills OR criteria) 
+        //		convert into the logically equivalent
+        //		SELECT * WHERE (1 AND skills) OR (1 AND criteria)
+        //		avoid duplicate field Query by using a Set
+        Set<String> fieldsToQuery = new Set<String>{'Id', 'Name', 'Launchpad__Geo_Location__Latitude__s', 'Launchpad__Geo_Location__Longitude__s', 'Launchpad__Wage_Desired__c',
+                             	                    'FirstName', 'LastName', 'Email', 'MailingCity', 'MobilePhone', 'HomePhone', 
+                                                    'Launchpad__Education__c', 'Launchpad__Distance_Can_Travel_Formula__c',
+                                                    'Owner.FirstName', '(SELECT Launchpad__Skill1__r.Name FROM Launchpad__Client_Skills__r)'};
+        fieldsToQuery.addAll(contactCriteriaFields);	//use the Custom Settings in Matching Criteria to expand on the Skill Matching and also query those fields
+        fieldsToQuery.addAll(matchingKeywordFields('Contact'));	//add fields for Keyword Matching
+            
+        String querySelect = '';
+        for(String s : fieldsToQuery) {
+			querySelect += (querySelect == '' ? '' : ', ' ) + s;
+        }
+
+		//queryWhere1 is the standard limiting query used by Skills and Criteria
+        String queryWhere1 = 'Id != :alreadyMatched AND Id NOT IN (SELECT Launchpad__Participant__c FROM Launchpad__Applicant_Tracking__c WHERE Launchpad__Job_Order__c =: objectToMatchId)';
+        
+        //also add Distance Filter to 1 if applicable
+        List<String> distanceFilter = createQueryDistanceFilter(jo, radius, filterEmptyDistances);
+        querySelect += distanceFilter[0];
+        queryWhere1 += distanceFilter[1];
+        String queryOrderBy = distanceFilter[2];
+
+        //add Skills Matching by searching for Ids in a list of Skills on the Job passed in
+        String queryWhereSkills = 'Id IN (SELECT Launchpad__Client__c FROM Launchpad__Client_Skill__c WHERE Launchpad__Skill1__c = :skillIds)';
+        
+        //use the Custom Settings in Matching Criteria to expand on the Skill Matching
+        String queryWhereCriteria = createQueryWhereCriteria(jo);
+        
+        //keyword search very similar to Criteria
+        String queryWhereKeywords = createQueryWhereKeywords('Contact');
+        
+        return executeMatchQuery('Contact', jo, jo.Id, alreadyMatched, jobSkillIds, querySelect, queryWhere1, queryWhereSkills, queryWhereCriteria, queryWhereKeywords, queryOrderBy);
+    }
+    
+    private List<Launchpad__Match__c> executeMatchQuery(String objectToQuery, SObject objectToMatch, Id objectToMatchId, List<Id> alreadyMatched, List<String> skillIds, String querySelect, String queryWhere1, String queryWhereSkills, String queryWhereCriteria, String queryWhereKeywords, String queryOrderBy) {
+		//	System.QueryException: Maximum 2 semi join sub-selects are allowed
+		//		if run as 1 query so run 2 queries if needed and join results in a Map
+		Map<Id, SObject> m = new Map<Id, SObject>();
+        try {
+            String queryLimit = '1000';
+            if(String.isNotBlank(queryWhereCriteria) && String.isNotBlank(queryWhereKeywords)) {
+                queryLimit = '333';	//if 3 queries are being combined they can only total to 1000;
+            }
+            else if(String.isNotBlank(queryWhereCriteria) || String.isNotBlank(queryWhereKeywords)) {
+                queryLimit = '500';	//if 2 queries are being combined they can only total to 1000;
+            }
+            
+            String query = 'SELECT ' + querySelect + ' FROM ' + objectToQuery + ' WHERE ' + queryWhere1 + ' AND ' + queryWhereSkills + ' ' + queryOrderBy + ' LIMIT ' + queryLimit;
+            debug('query:'+query);
+            m.putAll((List<SObject>)Database.query(query));
+			debug('skills matching returned '+m.keySet().size());            
+            if(String.isNotBlank(queryWhereCriteria)) {
+                query = 'SELECT ' + querySelect + ' FROM ' + objectToQuery + ' WHERE ' + queryWhere1 + ' AND (' + queryWhereCriteria + ') ' + queryOrderBy + ' LIMIT ' + queryLimit;
+                debug('query:'+query);
+                List<SObject> criteriaResults = (List<SObject>)Database.query(query);
+                m.putAll(criteriaResults);
+				debug('criteria matching returned '+ criteriaResults.size());
+                calculateQueryWhereCriteriaPercentageMatch(objectToMatch, criteriaResults);
+            }
+            if(String.isNotBlank(queryWhereKeywords)) {
+                query = 'SELECT ' + querySelect + ' FROM ' + objectToQuery + ' WHERE ' + queryWhere1 + ' AND (' + queryWhereKeywords + ') ' + queryOrderBy + ' LIMIT ' + queryLimit;
+                debug('query:'+query);
+                List<SObject> criteriaResults = (List<SObject>)Database.query(query);
+                m.putAll(criteriaResults);
+				debug('keywords matching returned '+ criteriaResults.size());
+                calculateQueryWhereKeywordsPercentageMatch(objectToMatch, criteriaResults);
+            }            
+        }
+        catch(Exception e) {
+            debug(e);
+            return new List<Launchpad__Match__c>();
+        }
+        
+        List<Launchpad__Match__c> matches = filter(objectToMatch, m.values(), skillIds);
+        
+        return matches;
+    }
+    
+    //use the Custom Settings to determine if Distance Filtering is enabled
+    //	and return a List of Strings containing two Strings
+    //		1. the SELECT clause
+    //		2. the WHERE clause
+    //		3. the ORDER BY clause
+    private List<String> createQueryDistanceFilter(SObject so, Integer radius, Boolean filterEmptyDistances) {
+        useContactDistanceMatchPatch = false;
+        List<String> distanceFilter = new List<String>{'', '', ''};
+
+        //determine the distance in miles that the Contact and Job need to be within each other
+        String radiusCompare;
+        if(radius != null) {
+            radiusCompare = String.valueOf(radius);
+        }
+        else if(true == enableLocationFilterByContact) {	//	1st priority is using the distance on the Contact if specified in Custom Settings
+            if(so instanceOf Contact) {	//if this is a Contact looking for matching Jobs then compare to the Distance Can Travel set on the Contact
+                radiusCompare = String.valueOf(so.get('Launchpad__Distance_Can_Travel_Formula__c'));
+            }
+            else if(so instanceOf Launchpad__Job__c) {	//but if it is a Job looking for matching Contacts then compare it to the Distance Can Travel field of the Contact object
+                radiusCompare = 'Launchpad__Distance_Can_Travel_Formula__c';	// DISTANCE function in SOQL cannot be compared to a dynamic field on the Contact object at this point so
+                																//	overrwrite this for now but leave in case it changes going forward...
+                useContactDistanceMatchPatch = true;
+                debug('useContactDistanceMatchPatch:'+useContactDistanceMatchPatch);
+            }
+        }
+        
+        Double latitude;
+        Double longitude;
+        
+        latitude = (Double)so.get('Launchpad__Geo_Location__Latitude__s');
+		longitude = (Double)so.get('Launchpad__Geo_Location__Longitude__s');
+        
+        //if radius, latitude and longitude were all found then add to the query and order by it
+        if(String.isNotEmpty(radiusCompare) && latitude != null && longitude != null) {
+            distanceFilter[0] = ', DISTANCE(Launchpad__Geo_Location__c, GEOLOCATION(' + latitude + ',' + longitude + '),\'mi\') distanceApart';
+            distanceFilter[1] = '';
+            if(filterEmptyDistances) {	//don't return records where the Geo Info is not set...
+                distanceFilter[1] += ' AND Launchpad__Geo_Location__Latitude__s != null AND Launchpad__Geo_Location__Longitude__s != null';
+            }
+            if(Integer.valueOf(radiusCompare) > 0) {
+            	distanceFilter[1] = ' AND DISTANCE(Launchpad__Geo_Location__c, GEOLOCATION(' + latitude + ',' + longitude + '),\'mi\') < ' + radiusCompare;
+            }
+            distanceFilter[2] = 'ORDER BY DISTANCE(Launchpad__Geo_Location__c, GEOLOCATION(' + latitude + ',' + longitude + '),\'mi\')';
+        }
+        
+        //SOQL cannot dynamically compare DISTANCE to the Contact.Launchpad__Distance_Can_Travel_Formula__c field so filter out results
+        if(useContactDistanceMatchPatch == true) {
+            distanceFilter[1] = '';
+        }
+
+        return distanceFilter;
+    }
+    
+    //use the Custom Settings in Matching Criteria to expand on the Skill Matching
+    //	passing in a Contact record or Job record loop through Matching Criteria
+    //	to create a valid WHERE clause to return matching Jobs and Participants
+    private String createQueryWhereCriteria(SObject contactOrJob) {
+        String queryWhereCriteria = '';
+        
+        try {
+            if(contactOrJob instanceOf Contact || contactOrJob instanceOf Launchpad__Job__c) {
+                if(matchingCriteriaList.size() > 0) {
+                    Map<String, Schema.SObjectField> contactFields = Schema.getGlobalDescribe().get('Contact').getDescribe().fields.getMap();
+                    Map<String, Schema.SObjectField> jobFields = Schema.getGlobalDescribe().get('Launchpad__Job__c').getDescribe().fields.getMap();
+                    Boolean addOrConnector = false;
+                    for(Launchpad__Matching_Criteria__c matchingCriteria : matchingCriteriaList) {
+                        Schema.DisplayType contactFieldType = contactFields.get(matchingCriteria.Launchpad__Contact_Field_API_Name__c).getDescribe().getType();
+                        Schema.DisplayType jobFieldType = contactFields.get(matchingCriteria.Launchpad__Contact_Field_API_Name__c).getDescribe().getType();
+                        String queryField = contactOrJob instanceOf Contact ? matchingCriteria.Launchpad__Job_Field_API_Name__c : matchingCriteria.Launchpad__Contact_Field_API_Name__c;
+                        String valueField = contactOrJob instanceOf Contact ? matchingCriteria.Launchpad__Contact_Field_API_Name__c : matchingCriteria.Launchpad__Job_Field_API_Name__c;
+                        if(contactFieldType != jobFieldType) {
+                            debug('SkillsMatching.createQueryWhereCriteria only matches on fields of the same type.  Error with ' + matchingCriteria.Name);
+                            continue;
+                        }
+                        if((Schema.DisplayType.STRING == contactFieldType || Schema.DisplayType.PICKLIST == contactFieldType) && String.isNotBlank((String)contactOrJob.get(valueField))) {
+                            queryWhereCriteria += addOrConnector ? ' OR ' : '';
+                            queryWhereCriteria += queryField + ' = \'' + String.escapeSingleQuotes(String.valueOf(contactOrJob.get(valueField))) + '\'';
+                            addOrConnector = true;
+                        }
+                        else if(Schema.DisplayType.BOOLEAN == contactFieldType) {
+                            if((Boolean)contactOrJob.get(valueField)) {	//	only match on true...to many matches if matched also on false
+                                queryWhereCriteria += addOrConnector ? ' OR ' : '';
+                                queryWhereCriteria += queryField + ' = ' + String.valueOf(contactOrJob.get(valueField));
+                                addOrConnector = true;
+                            }
+                        }
+                        else {
+                            debug('SkillsMatching.createQueryWhereCriteria does not support matching on field type ' + contactFieldType);
+                            continue;
+                        }
+                    }
+                }
+            }
+            else {
+                debug('SkillsMatching.createQueryWhereCriteria does not work with object of type ' + contactOrJob.getSobjectType());
+            }                
+        }
+        catch(Exception e) {
+            debug(e);
+        }
+
+        return queryWhereCriteria;
+    }
+    
+    //very similar to Criteria
+    private String createQueryWhereKeywords(String contactOrJob) {
+        String queryWhereKeywords = '';
+        
+        if(String.isNotBlank(keywordSearchTerms)) {
+            try {
+                Boolean addOrConnector = false;
+                for(String fieldName : matchingKeywordFields(contactOrJob)) {
+                    for(String keywordSearchTerm : keywordSearchTerms.split(' ')) {
+                        queryWhereKeywords += addOrConnector ? ' OR ' : '';
+                        queryWhereKeywords += fieldName + ' LIKE \'%' + String.escapeSingleQuotes(keywordSearchTerm) + '%\'';
+                        addOrConnector = true;
+                    }
+                }         
+            }
+            catch(Exception e) {
+                debug(e);
+            }
+        }
+
+        return queryWhereKeywords;
+    }    
+
+    //for any results from the Criteria Matching loop through and determine
+    //	which pieces of the OR statement actually matched the matchObject that was queried against
+    //	and save as a percentage so the results can be filtered by custom settings
+    //	Criteria Match Percentage
+    private String calculateQueryWhereCriteriaPercentageMatch(SObject objectToMatch, List<SObject> contactOrJobList) {
+        criteriaPercentageMatchMap = new Map<Id, Decimal>();
+
+        String queryWhereCriteria = '';
+        try {
+            for(SObject contactOrJob : contactOrJobList) {
+                if(contactOrJob instanceOf Contact || contactOrJob instanceOf Launchpad__Job__c) {
+                    if(matchingCriteriaList.size() > 0) {
+                        Map<String, Schema.SObjectField> contactFields = Schema.getGlobalDescribe().get('Contact').getDescribe().fields.getMap();
+                        Map<String, Schema.SObjectField> jobFields = Schema.getGlobalDescribe().get('Launchpad__Job__c').getDescribe().fields.getMap();
+                        Boolean addOrConnector = false;
+                        for(Launchpad__Matching_Criteria__c matchingCriteria : matchingCriteriaList) {
+                            Schema.DisplayType contactFieldType = contactFields.get(matchingCriteria.Launchpad__Contact_Field_API_Name__c).getDescribe().getType();
+                            Schema.DisplayType jobFieldType = contactFields.get(matchingCriteria.Launchpad__Contact_Field_API_Name__c).getDescribe().getType();
+                            String queryField = contactOrJob instanceOf Contact ? matchingCriteria.Launchpad__Job_Field_API_Name__c : matchingCriteria.Launchpad__Contact_Field_API_Name__c;
+                            String valueField = contactOrJob instanceOf Contact ? matchingCriteria.Launchpad__Contact_Field_API_Name__c : matchingCriteria.Launchpad__Job_Field_API_Name__c;
+                            if(contactFieldType != jobFieldType) {
+                                debug('SkillsMatching.calculateQueryWhereCriteriaPercentageMatch only compares fields of the same type.  Error with ' + matchingCriteria.Name);
+                                continue;
+                            }                      
+                            if(objectToMatch.get(queryField) == contactOrJob.get(valueField)) {
+                                if(Schema.DisplayType.BOOLEAN == contactFieldType && objectToMatch.get(queryField) != true) {
+                                    continue;	//only count matching BOOLEAN of true to avoid too many hits
+                                }
+                                Decimal count = criteriaPercentageMatchMap.get(contactOrJob.Id);
+                                if(count == null) {
+                                    count = 0;
+                                }
+                                count++;
+                                criteriaPercentageMatchMap.put(contactOrJob.Id, count);
+                                debug('criteriaPercentageMatchMap ' + contactOrJob.Id + ' set to ' + count);
+                            }
+                        }
+                    }
+                }
+                else {
+                    debug('SkillsMatching.calculateQueryWhereCriteriaPercentageMatch does not work with object of type ' + contactOrJob.getSobjectType());
+                }
+            }
+        }
+        catch(Exception e) {
+            debug(e);
+        }
+        
+        return queryWhereCriteria;
+    }
+    
+    //for any results from the Keywords Matching loop through and determine
+    //	which pieces of the OR statement actually matched the matchObject that was queried against
+    //	and save as a percentage so the results can be filtered by custom settings
+    //	Criteria Match Percentage
+    private void calculateQueryWhereKeywordsPercentageMatch(SObject objectToMatch, List<SObject> contactOrJobList) {
+        keywordsPercentageMatchMap = new Map<Id, Decimal>();
+
+        try {
+            for(SObject contactOrJob : contactOrJobList) {
+                if(contactOrJob instanceOf Contact || contactOrJob instanceOf Launchpad__Job__c) {
+                    for(String keywordSearchTerm : keywordSearchTerms.split(' ')) {
+                        for(String fieldName : matchingKeywordFields(String.valueOf(contactOrJob.getSObjectType()))) {
+                			if(contactOrJob.get(fieldName) != null && ((String)contactOrJob.get(fieldName)).containsIgnoreCase(keywordSearchTerm)) {
+                        		Decimal count = keywordsPercentageMatchMap.get(contactOrJob.Id);
+                                if(count == null) {
+                                    count = 0;
+                                }
+                                count++;
+                                keywordsPercentageMatchMap.put(contactOrJob.Id, count);
+                                break;
+                            }
+                        }
+                	}
+                }
+                else {
+                    debug('SkillsMatching.calculateQueryWhereKeywordsPercentageMatch does not work with object of type ' + contactOrJob.getSobjectType());
+                }
+            }
+        }
+        catch(Exception e) {
+            debug(e);
+        }
+    }    
+    
+    //filter out non-matching criteria
+    private List<Launchpad__Match__c> filter(SObject objectToMatch, List<SObject> sObjectList, List<String> skillIds) {
+        List<Launchpad__Match__c> results = new List<Launchpad__Match__c>();
+        for(SObject o : sObjectList) {
+            if(!(o instanceOf Contact) && !(o instanceOf Launchpad__Job__c)) {
+                debug('SkillsMatching.filter does not work for SObject type ' + o.getSObjectType() + ', o:'+o);
+            }
+            
+            Launchpad__Match__c match = new Launchpad__Match__c();
+            if(o instanceOf Contact) {
+                if(useContactDistanceMatchPatch) {	//SOQL cannot dynamically compare DISTANCE to the Contact.Launchpad__Distance_Can_Travel_Formula__c field so filter out results	
+                    try {
+                        if((Decimal)o.get('distanceApart') > (Decimal)o.get('Launchpad__Distance_Can_Travel_Formula__c')) {
+                            debug('filtering out Contact match due to distanceApart:' + o.get('distanceApart') + ' and Launchpad__Distance_Can_Travel_Formula__c:' + o.get('Launchpad__Distance_Can_Travel_Formula__c'));
+                            continue;
+                        }
+                    }
+                    catch(Exception e) {
+                        debug(e);
+                        continue;
+                    }
+                }
+            }
+        
+            match.Launchpad__Client__c = o instanceOf Contact ? (Id)o.get('Id') : objectToMatch.Id;
+            match.Contact_Name__c = o instanceOf Contact ? (String)o.get('Name') : (String)objectToMatch.get('Name');
+            match.Launchpad__Job__c = o instanceOf Contact ? objectToMatch.Id : (Id)o.get('Id');
+            match.Job_Name__c = o instanceOf Contact ? (String)objectToMatch.get('Name') : (String)o.get('Name');
+            match.Launchpad__Match__c = getSkillsPercentageMatch(skillIds, getSkillsFoundInSOQL(o));
+            match.Launchpad__Match_Criteria__c = getCriteriaPercentageMatch((Id)o.get('Id'));
+            match.Match_Keywords__c = getKeywordsPercentageMatch((Id)o.get('Id'));
+            match.Launchpad__Distance_Numeric__c = 24901;	//default to circumference of earth unless a value was returned
+            try {
+                match.Launchpad__Distance_Numeric__c = (Decimal)o.get('distanceApart');
+            }
+            catch(Exception e) {
+                debug(e);
+            }
+            results.add(match);
+        }
+        return results;
+    }
+    
+    //for the Launchpad__Job__c or Contact passed in return a List of Ids of Skills found on that object
+    public List<String> getSkillsFoundInSOQL(SObject o) {
+        List<String> skillIds = new List<String>();
+        try {
+            List<SObject> skills;
+            if(o instanceOf Launchpad__Job__c) {
+                skills = o.getSObjects('Launchpad__JobSkills__r');
+            }
+            else if(o instanceOf Contact) {
+                skills = o.getSObjects('Launchpad__Client_Skills__r');
+            }
+            if(skills != null) {
+                for(SObject skill : skills) {
+                    skillIds.add(String.valueOf(skill.get('Launchpad__Skill1__c')));
+                }
+            }
+        }
+        catch(Exception e) {
+            debug(e);
+        }
+        return skillIds;
+    }
+    
+    //what percent of the skills on a Job are matched by the skills on a Contact
+    //	if Contact has skills A, B, C and a Job has skills A the Contact will match the Job with 100%
+    //	if the Job had skills A and D the match would be 50%
+    public Decimal getSkillsPercentageMatch(List<String> contactSkillIds, List<String> jobSkillIds) {
+        if(contactSkillIds == null || jobSkillIds == null || contactSkillIds.size() == 0 || jobSkillIds.size() == 0) {
+            return 0;
+        }
+        
+        Integer matchCount = 0;
+        for(String jobSkillId : jobSkillIds) {
+            if(contactSkillIds.contains(jobSkillId)) {
+                matchCount++;
+            }
+        }
+        
+        return Math.roundToLong(((Decimal)matchCount / (Decimal)jobSkillIds.size()) * 100);
+    }
+    
+    public Decimal getCriteriaPercentageMatch(String idToMatch) {
+        Decimal percentageMatch = 0;
+        try {
+            if(matchingCriteriaList.size() > 0 && criteriaPercentageMatchMap != null) {
+                if(criteriaPercentageMatchMap.get(idToMatch) != null) {
+                	percentageMatch = criteriaPercentageMatchMap.get(idToMatch) / matchingCriteriaList.size();
+                }
+            }
+            percentageMatch = Math.roundToLong(percentageMatch * 100);
+        }
+        catch(Exception e) {
+            debug('idToMatch:'+idToMatch+', criteriaPercentageMatchMap:'+criteriaPercentageMatchMap);
+			debug(e);
+        }
+        return percentageMatch;
+    }
+    
+    public Decimal getKeywordsPercentageMatch(String idToMatch) {
+        Decimal percentageMatch = 0;
+        try {
+            if(String.isNotBlank(keywordSearchTerms) && keywordsPercentageMatchMap != null) {
+                if(keywordsPercentageMatchMap.get(idToMatch) != null) {
+                	percentageMatch = keywordsPercentageMatchMap.get(idToMatch) / keywordSearchTerms.split(' ').size();
+                }
+            }
+            percentageMatch = Math.roundToLong(percentageMatch * 100);
+        }
+        catch(Exception e) {
+            debug('idToMatch:'+idToMatch+', criteriaPercentageMatchMap:'+criteriaPercentageMatchMap);
+			debug(e);
+        }
+        return percentageMatch;
+    }    
+    
+    public List<Launchpad__Skill1__c> getMatchingSkills(List<String> skillsSearched, List<String> skillsFound) {
+        List<Launchpad__Skill1__c> matchingSkills = new List<Launchpad__Skill1__c>();
+        
+        
+        return matchingSkills;
+    }
+    
+    //List of fields to search for keyword matches
+    private List<String> matchingKeywordFields(String contactOrJob) {
+        if('Contact'.equalsIgnoreCase(contactOrJob)) {
+            Launchpad_Configuration__c launchpadConfiguration = Launchpad_Configuration__c.getInstance();
+            if(String.isNotBlank(launchpadConfiguration.Job_Matching_Contact_Keyword_Fields__c)) {
+        		return launchpadConfiguration.Job_Matching_Contact_Keyword_Fields__c.split(' ');
+            }
+        }
+        else if('Launchpad__Job__c'.equalsIgnoreCase(contactOrJob)) {
+            Launchpad_Configuration__c launchpadConfiguration = Launchpad_Configuration__c.getInstance();
+            if(String.isNotBlank(launchpadConfiguration.Job_Matching_Job_Keyword_Fields__c)) {
+        		return launchpadConfiguration.Job_Matching_Job_Keyword_Fields__c.split(' ');
+            }
+        }
+        return new List<String>();
+    }
+    
+    //from Custom Setting get a list of fields to compare Contact and Job records for matches
+    private List<Launchpad__Matching_Criteria__c> matchingCriteriaList {
+        get {
+            if(matchingCriteriaList == null) {
+                matchingCriteriaList = new List<Launchpad__Matching_Criteria__c>();
+                try {
+                    List<Launchpad__Matching_Criteria__c> tmp = [SELECT Id, Launchpad__Contact_Field_API_Name__c, Launchpad__Job_Field_API_Name__c 
+                                                                 FROM Launchpad__Matching_Criteria__c
+                                                                 WHERE Launchpad__Active__c = true];
+        
+                    for(Launchpad__Matching_Criteria__c matchingCriteria : tmp) {
+                        if(Contact.getSobjectType().getDescribe().fields.getMap().keySet().contains(matchingCriteria.Launchpad__Contact_Field_API_Name__c.toLowerCase()) &&
+                           Launchpad__Job__c.getSobjectType().getDescribe().fields.getMap().keySet().contains(matchingCriteria.Launchpad__Job_Field_API_Name__c.toLowerCase())) {
+                               matchingCriteriaList.add(matchingCriteria);
+                        }
+                        else {
+                            debug('bad matching criteria setting:' + matchingCriteria);
+                        }
+                    }
+                }
+                catch(Exception e) {
+                    debug(e);
+                }
+            }
+            return matchingCriteriaList;
+        }
+        set;
+    }
+    
+    private void notify(String message) {
+        ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.INFO, message));
+    }
+    
+    //Debugging options that can be specified from params by passing debugVisualforce=true and/or debugLog=true
+    public Boolean debugVisualforce {get;set;}	//display debug info on Visualforce page
+    public Boolean debugLog {get;set;}
+    private void debug(String debugMessage) {
+        if(debugVisualforce) {
+            ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.INFO, debugMessage));
+        }
+        if(debugLog) {
+            System.debug(debugMessage);
+        }
+    }
+    private void debug(Exception e) {
+        if(debugVisualforce) {
+            ApexPages.addMessage(new ApexPages.Message(ApexPages.Severity.ERROR, e.getMessage() + ' : ' + e.getStackTraceString()));
+        }
+        if(debugLog) {
+            System.debug(e.getMessage() + ' : ' + e.getStackTraceString());
+        }        
+    }
+}
