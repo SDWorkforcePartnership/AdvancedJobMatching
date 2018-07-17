@@ -1,0 +1,398 @@
+<apex:page controller="AdvancedJobMatchingController" 
+           standardStylesheets="false"
+           lightningStylesheets="true"
+           showHeader="false" 
+           sidebar="false"  
+           applyHtmlTag="false" 
+           applyBodyTag="false" 
+           docType="html-5.0">
+
+<head>
+	<title>Advanced Job Matching</title>
+    
+    <style>
+        body { background-color: {!backgroundColor}; }
+    </style>
+    
+    <!--jQuery CDN-->
+	<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
+	<script>
+		var j$ = jQuery.noConflict();
+	</script>
+</head>
+    
+<body>
+    <apex:slds />
+    <div class="slds-scope">
+    <div class="slds-box slds-theme_default">
+    
+    <apex:pageMessages id="pageMessages" />
+
+    <apex:form >
+        <apex:outputPanel id="top" styleClass="slds">
+        <apex:inputHidden value="{!debugVisualforce}"/>
+        <apex:inputHidden value="{!debugLog}"/>
+        <apex:outputPanel layout="block" styleClass="slds-grid slds-gutters slds-wrap" rendered="{!allowObjectToMatchSelection}">
+            <div class="slds-col slds-size--3-of-12 slds-p-around--small slds-grow-none">
+                <div class="slds-form-element">
+                    <label class="slds-form-element__label">Contact to find Jobs for</label>
+                    <div class="slds-form-element__control">
+                        <div class="slds-select_container">
+                            <apex:selectList size="1" value="{!selectedContactId}" styleClass="slds-select">
+                                <apex:selectOptions value="{!contactsList}" />
+                            </apex:selectList>
+                        </div>                        
+                    </div>
+                    <apex:commandButton action="{!selectContactToMatch}" value="Select Contact" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+                </div>
+            </div>
+            <div class="slds-col slds-size--3-of-12 slds-p-around--small slds-grow-none slds-border_right">
+                <div class="slds-form-element">
+                    <label class="slds-form-element__label">Contacts can return 500 records, filter by Name</label>
+                    <div class="slds-form-element__control">
+                        <apex:input value="{!contactsListFilter}" styleClass="slds-input"/>
+                    </div>
+                    <apex:commandButton action="{!refreshFilter}" value="Filter List" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+                </div>
+            </div>
+            <div class="slds-col slds-size--3-of-12 slds-p-around--small slds-grow-none slds-border_left">
+                <div class="slds-form-element">
+                    <label class="slds-form-element__label">Job to find Contacts for (Jobs with 1 or more Openings)</label>
+                    <div class="slds-form-element__control">
+                        <div class="slds-select_container">
+                            <apex:selectList size="1" value="{!selectedJobId}" styleClass="slds-select">
+                                <apex:selectOptions value="{!jobsList}" />
+                            </apex:selectList>
+                        </div>
+                    </div>
+                    <apex:commandButton action="{!selectJobToMatch}" value="Select Job" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+                </div>
+            </div>
+            <div class="slds-col slds-size--3-of-12 slds-p-around--small slds-grow-none">
+                <div class="slds-form-element">
+                    <label class="slds-form-element__label">Jobs can return 500 records, filter by Name</label>
+                    <div class="slds-form-element__control">
+                        <apex:input value="{!jobsListFilter}" styleClass="slds-input"/>
+                    </div>
+                    <apex:commandButton action="{!refreshFilter}" value="Filter List" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+                </div>
+            </div>
+        </apex:outputPanel>
+        
+        <apex:outputPanel rendered="{!objectToMatch != null}" layout="none">
+        <div class="slds-section {!IF(matches == null || matches.size == 0, 'slds-is-open', '')}">
+            <h3 class="slds-section__title">
+                <button aria-controls="expando-match-filters" aria-expanded="true" class="slds-button slds-section__title-action" onclick="return false;">
+                    <svg class="slds-section__title-action-icon slds-button__icon slds-button__icon_left" aria-hidden="true">
+                        <use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="/apexpages/slds/latest/assets/icons/utility-sprite/svg/symbols.svg#switch" />
+                    </svg>
+                    <span class="slds-truncate" title="Section Title">Match Filters</span>
+                </button>
+            </h3>
+            <div aria-hidden="false" class="slds-section__content" id="expando-match-filters">
+                <div class="slds-grid slds-wrap slds-box slds-box_x-small">
+                    <div class="slds-col slds-size--1-of-1 slds-grow-none">
+                    	<div class="slds-text-heading_small">Keyword Filter</div>
+                    </div>
+                    <div class="slds-col slds-size--1-of-1 slds-p-around--x-small slds-grow-none">
+                        <div class="slds-form-element">
+                            <label class="slds-form-element__label">space separated list of terms</label>
+                            <div class="slds-form-element__control">
+                                <apex:input value="{!keywordSearchTerms}" styleClass="slds-input" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+				<div class="slds-grid slds-wrap slds-box slds-box_x-small">
+                    <div class="slds-col slds-size--1-of-1 slds-grow-none">
+                    	<div class="slds-text-heading_small">Criteria Filter</div>
+                    </div>
+                    <apex:repeat value="{!criteriaFieldWrapperList}" var="fw" >
+                    <div class="slds-col slds-size--1-of-2 slds-p-around--x-small slds-grow-none">
+                        <div class="slds-form-element">
+                            <label class="slds-form-element__label">{!fw.fieldLabel}</label>
+                            <apex:outputPanel rendered="{!fw.fieldType == 'BOOLEAN'}" layout="none">    <!-- BOOLEAN needs a special slds faux checkbox to display correctly -->
+                                <div class="slds-form-element__control">
+                                    <label class="slds-checkbox">
+                                        <apex:inputCheckbox value="{!objectToMatch[fw.fieldName]}" label="{!fw.fieldLabel}" />
+                                        <span class="slds-checkbox--faux"></span>
+                                    </label>
+                                </div>
+                            </apex:outputPanel>
+                            <apex:outputPanel rendered="{!fw.fieldType != 'BOOLEAN'}" layout="none">
+                                <div class="slds-form-element__control">
+                                    <apex:inputField value="{!objectToMatch[fw.fieldName]}" styleClass="slds-input" />
+                                </div>
+                            </apex:outputPanel>
+                        </div>
+                    </div>
+                    </apex:repeat>
+                </div>                
+
+                <div class="slds-grid slds-wrap slds-box slds-box_x-small">
+                    <div class="slds-col slds-size--1-of-1 slds-grow-none">
+                    	<div class="slds-text-heading_small">Skills Filter</div>
+                    </div>
+                    <div class="slds-col slds-size--10-of-12 slds-p-around--x-small slds-grow-none">
+                        <div class="slds-form-element">
+                            <label class="slds-form-element__label">Skills can return 500 records, reduce by Name filter</label>
+                            <div class="slds-form-element__control">
+                                <apex:input value="{!skillsListFilter}" styleClass="slds-input"/>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="slds-col slds-size--2-of-12 slds-p-top--x-large slds-grow-none">
+                        <div class="slds-form-element">
+                            <apex:commandButton action="{!refreshFilter}" value="Filter List" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+                        </div>
+                    </div>
+                    <div class="slds-col slds-size--1-of-1 slds-p-around--x-small slds-grow-none">
+                        <div class="slds-form-element">
+                            <label class="slds-form-element__label">Skills to Match on</label>
+                            <div class="slds-form-element__control">
+                                <div class="slds-select_container">
+                                    <apex:selectList value="{!skillsSelected}" multiselect="true" size="5" styleClass="slds-select">
+                                        <apex:selectOptions value="{!skillsList}" />
+                                    </apex:selectList>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="slds-grid slds-wrap slds-box slds-box_x-small">
+                    <div class="slds-col slds-size--1-of-1 slds-grow-none">
+                    	<div class="slds-text-heading_small">Distance Filter</div>
+                    </div>
+                    <div class="slds-col slds-size--1-of-2 slds-p-around--small slds-grow-none">
+                        <div class="slds-form-element">
+                            <label class="slds-form-element__label">Distance (Miles) matches must be within (0 will disable this filter)</label>
+                            <div class="slds-form-element__control">
+                                <apex:input value="{!distanceFilter}" styleClass="slds-input"/>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="slds-col slds-size--1-of-2 slds-p-around--small slds-grow-none">
+                        <div class="slds-form-element">
+                            <label class="slds-form-element__label">Filter Out Empty Distances (Matches with records that have no Geocode Information)</label>
+                            <div class="slds-form-element__control">
+                                <label class="slds-checkbox">
+                                    <apex:inputCheckbox value="{!filterOutEmptyDistances}" label="Filter Out Empty Distances (Matches with records that have no Geocode Information)" />
+                                    <span class="slds-checkbox--faux"></span>
+                                </label>
+                            </div>
+                        </div>                    
+                    </div>
+                </div>
+
+				<div class="slds-button-group slds-p-top--x-small slds-p-bottom--medium" role="group">
+            		<apex:commandButton action="{!search}" value="Search" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+        		</div>
+                
+            </div>
+        </div>    
+
+        <apex:actionFunction id="sortTable" action="{!sortTable}" name="sortTable" reRender="pageMessages,expando-criteria-match-results">
+            <apex:param name="sortColumn" value=""/>
+        </apex:actionFunction>
+        <div class="slds-section slds-is-open">
+            <h3 class="slds-section__title">
+                <button aria-controls="expando-criteria-match-results" aria-expanded="true" class="slds-button slds-section__title-action" onclick="return false;">
+                    <svg class="slds-section__title-action-icon slds-button__icon slds-button__icon_left" aria-hidden="true">
+                        <use xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="/apexpages/slds/latest/assets/icons/utility-sprite/svg/symbols.svg#switch" />
+                    </svg>
+                    <span class="slds-truncate" title="Section Title">Match Results</span>
+                </button>
+            </h3>
+            <apex:outputPanel html-aria-hidden="false" styleClass="slds-section__content" id="expando-criteria-match-results" layout="block">
+                <apex:outputPanel styleClass="slds-button-group slds-p-top--x-small slds-p-bottom--x-small" html-role="group" rendered="{!matches != null && matches.size > 0}">
+                    <apex:commandButton action="{!addMatches}" value="Add Matches" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+                </apex:outputPanel>
+                <apex:outputPanel styleClass="slds-button-group slds-p-top--x-small slds-p-bottom--x-small" html-role="group" rendered="{!matches != null && matches.size > 0}">
+                    <apex:commandButton action="{!sortTable}" value="Sort" styleClass="slds-button slds-button--brand" style="background-color:#F7931D; border-color:#F7931D;"/>
+                    <div class="slds-form-element__control">
+                        <div class="slds-select_container">
+                            <apex:selectList size="1" value="{!sortColumn}" styleClass="slds-select">
+                                <apex:selectOptions value="{!sortColumnList}" />
+                            </apex:selectList>
+                        </div>                        
+                    </div>
+            	</apex:outputPanel>
+                <ul>
+                <apex:repeat value="{!matches}" var="sortableMatch" >
+                    <li style="border-top:solid 1px lightgray; padding:5px;">
+                        <div class="slds-form-element__control">
+                            <label class="slds-checkbox">
+                                <apex:inputCheckbox value="{!sortableMatch.isSelected}" />
+                                <span class="slds-checkbox--faux" style="margin-right:5px;"/>
+                                <apex:outputPanel rendered="{!contactSearch == true}" layout="none"><a href="/{!sortableMatch.match.Launchpad__Client__c}" tabindex="-1">{!sortableMatch.match.Contact_Name__c}</a></apex:outputPanel>
+                                <apex:outputPanel rendered="{!jobSearch == true}" layout="none"><a href="/{!sortableMatch.match.Launchpad__Job__c}" tabindex="-1">{!sortableMatch.match.Job_Name__c}</a></apex:outputPanel>
+                            </label>
+                        </div>
+                        Matching:  Skills {!sortableMatch.match.Launchpad__Match__c}%, Criteria {!sortableMatch.match.Launchpad__Match_Criteria__c}%, Keywords {!sortableMatch.match.Match_Keywords__c}%
+                        <br/>
+                        Distance: {!sortableMatch.match.Launchpad__Distance_Numeric__c} miles
+                    </li>
+                </apex:repeat>
+                </ul>
+<!--                
+                <table class="slds-table slds-table_bordered slds-table_resizable-cols slds-table_fixed-layout" role="grid">
+                    <thead>
+                        <tr class="slds-line-height_reset">
+                            <th class="slds-text-align_right" scope="col" style="width: 3.25rem;">
+                                &nbsp;
+                            </th>
+                            <th aria-sort="none" class="slds-is-sortable slds-is-resizable slds-text-title_caps" aria-label="Client" scope="col">
+                                <a class="slds-th__action slds-text-link_reset" role="button" tabindex="-1" onclick="sortTable('Contact_Name__c');">
+                                    <span class="slds-assistive-text">Sort by: </span>
+                                    <span class="slds-truncate" title="Client">Client</span>
+                                </a>
+                                <span class="slds-assistive-text" aria-live="assertive" aria-atomic="true">Sorted none</span>
+                                <div class="slds-resizable">
+                                    <input type="range" min="20" max="1000" aria-label="Name column width" class="slds-resizable__input slds-assistive-text" id="cell-resize-handle-190" tabindex="-1" />
+                                    <span class="slds-resizable__handle">
+                                        <span class="slds-resizable__divider"></span>
+                                    </span>
+                                </div>
+                            </th>
+                            <th aria-sort="none" class="slds-is-sortable slds-is-resizable slds-text-title_caps" aria-label="Job" scope="col">
+                                <a class="slds-th__action slds-text-link_reset" role="button" tabindex="-1" onclick="sortTable('Job_Name__c');">
+                                    <span class="slds-assistive-text">Sort by: </span>
+                                    <span class="slds-truncate" title="Job">Job</span>
+                                </a>
+                                <span class="slds-assistive-text" aria-live="assertive" aria-atomic="true">Sorted none</span>
+                                <div class="slds-resizable">
+                                    <input type="range" min="20" max="1000" aria-label="Account Name column width" class="slds-resizable__input slds-assistive-text" id="cell-resize-handle-191" tabindex="-1" />
+                                    <span class="slds-resizable__handle">
+                                        <span class="slds-resizable__divider"></span>
+                                    </span>
+                                </div>
+                            </th>
+                            <th aria-sort="none" class="slds-is-sortable slds-is-resizable slds-text-title_caps" aria-label="Percent Match Skills" scope="col">
+                                <a class="slds-th__action slds-text-link_reset" role="button" tabindex="-1" onclick="sortTable('Launchpad__Match__c');">
+                                    <span class="slds-assistive-text">Sort by: </span>
+                                    <span class="slds-truncate" title="Percent Match Skills">% Match Skills</span>
+                                </a>
+                                <span class="slds-assistive-text" aria-live="assertive" aria-atomic="true">Sorted none</span>
+                                <div class="slds-resizable">
+                                    <input type="range" min="20" max="1000" aria-label="Close Date column width" class="slds-resizable__input slds-assistive-text" id="cell-resize-handle-192" tabindex="-1" />
+                                    <span class="slds-resizable__handle">
+                                        <span class="slds-resizable__divider"></span>
+                                    </span>
+                                </div>
+                            </th>
+                            <th aria-sort="none" class="slds-is-sortable slds-is-resizable slds-text-title_caps" aria-label="Percent Match Criteria" scope="col">
+                                <a class="slds-th__action slds-text-link_reset" role="button" tabindex="-1" onclick="sortTable('Launchpad__Match_Criteria__c');">
+                                    <span class="slds-assistive-text">Sort by: </span>
+                                    <span class="slds-truncate" title="Percent Match Criteria">% Match Criteria</span>
+                                </a>
+                                <span class="slds-assistive-text" aria-live="assertive" aria-atomic="true">Sorted none</span>
+                                <div class="slds-resizable">
+                                    <input type="range" min="20" max="1000" aria-label="Stage column width" class="slds-resizable__input slds-assistive-text" id="cell-resize-handle-193" tabindex="-1" />
+                                    <span class="slds-resizable__handle">
+                                        <span class="slds-resizable__divider"></span>
+                                    </span>
+                                </div>
+                            </th>
+                            <th aria-sort="none" class="slds-is-sortable slds-is-resizable slds-text-title_caps" aria-label="Percent Match Keywords" scope="col">
+                                <a class="slds-th__action slds-text-link_reset" role="button" tabindex="-1" onclick="sortTable('Match_Keywords__c');">
+                                    <span class="slds-assistive-text">Sort by: </span>
+                                    <span class="slds-truncate" title="Percent Match Keywords">% Match Keywords</span>
+                                </a>
+                                <span class="slds-assistive-text" aria-live="assertive" aria-atomic="true">Sorted none</span>
+                                <div class="slds-resizable">
+                                    <input type="range" min="20" max="1000" aria-label="Stage column width" class="slds-resizable__input slds-assistive-text" id="cell-resize-handle-193" tabindex="-1" />
+                                    <span class="slds-resizable__handle">
+                                        <span class="slds-resizable__divider"></span>
+                                    </span>
+                                </div>
+                            </th>
+                            <th aria-sort="none" class="slds-is-sortable slds-is-resizable slds-text-title_caps" aria-label="Distance" scope="col">
+                                <a class="slds-th__action slds-text-link_reset" role="button" tabindex="-1" onclick="sortTable('Launchpad__Distance_Numeric__c');">
+                                    <span class="slds-assistive-text">Sort by: </span>
+                                    <span class="slds-truncate" title="Distance">Distance(miles)</span>
+                                </a>
+                                <span class="slds-assistive-text" aria-live="assertive" aria-atomic="true">Sorted none</span>
+                                <div class="slds-resizable">
+                                    <input type="range" min="20" max="1000" aria-label="Confidence column width" class="slds-resizable__input slds-assistive-text" id="cell-resize-handle-194" tabindex="-1" />
+                                    <span class="slds-resizable__handle">
+                                        <span class="slds-resizable__divider"></span>
+                                    </span>
+                                </div>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <apex:repeat value="{!matches}" var="sortableMatch" >
+                        <tr class="slds-hint-parent">
+                            <td class="slds-text-align_right" role="gridcell">
+                                <div class="slds-form-element__control">
+                                    <label class="slds-checkbox">
+                                        <apex:inputCheckbox value="{!sortableMatch.isSelected}" />
+                                        <span class="slds-checkbox--faux"></span>
+                                    </label>
+                                </div>
+                            </td>
+                            <th scope="row" tabindex="0">
+                                <div class="slds-truncate" title="{!sortableMatch.match.Contact_Name__c}"><a href="/{!sortableMatch.match.Launchpad__Client__c}" tabindex="-1">{!sortableMatch.match.Contact_Name__c}</a></div>
+                            </th>
+                            <td role="gridcell">
+                                <div class="slds-truncate" title="{!sortableMatch.match.Job_Name__c}"><a href="/{!sortableMatch.match.Launchpad__Job__c}" tabindex="-1">{!sortableMatch.match.Job_Name__c}</a></div>
+                            </td>
+                            <td role="gridcell">
+                                <div class="slds-truncate" title="{!sortableMatch.match.Launchpad__Match__c}">{!sortableMatch.match.Launchpad__Match__c}</div>
+                            </td>
+                            <td role="gridcell">
+                                <div class="slds-truncate" title="{!sortableMatch.match.Launchpad__Match_Criteria__c}">{!sortableMatch.match.Launchpad__Match_Criteria__c}</div>
+                            </td>
+                            <td role="gridcell">
+                                <div class="slds-truncate" title="{!sortableMatch.match.Match_Keywords__c}">{!sortableMatch.match.Match_Keywords__c}</div>
+                            </td>
+                            <td role="gridcell">
+                                <div class="slds-truncate" title="{!sortableMatch.match.Launchpad__Distance_Numeric__c}">{!sortableMatch.match.Launchpad__Distance_Numeric__c}</div>
+                            </td>
+                        </tr>
+                    </apex:repeat>
+                    </tbody>
+                </table>
+-->
+            </apex:outputPanel>
+        </div>
+        </apex:outputPanel>
+        </apex:outputPanel>
+    </apex:form>
+        
+    </div>
+    </div>
+</body>
+    
+<script>
+/*SLDS Sections*/
+j$('.slds-section__title').find('button').find('svg').css('transition', '0.3s');
+j$('.slds-section__title').click(function(){
+    if(j$(this).parent().parent().hasClass('Minerva18SectionGroupSingle')){
+        if(j$(this).parent().hasClass('slds-is-open')){
+            j$(this).parent().removeClass('slds-is-open');
+            j$(this).parent().find('.slds-section__content').hide();
+        }
+        else{
+            j$(this).parent().parent().find('.slds-section').removeClass('slds-is-open');
+            j$(this).parent().parent().find('.slds-section__content').hide();
+            j$(this).parent().toggleClass('slds-is-open');
+            j$(this).parent().find('.slds-section__content').show();
+        }    
+    }
+    else{
+        j$(this).parent().toggleClass('slds-is-open');
+        if(j$(this).parent().hasClass('slds-is-open')){
+            j$(this).parent().find('.slds-section__content').show();
+        }else{
+            j$(this).parent().find('.slds-section__content').hide();
+        }
+    }
+});
+/*SLDS Sections*/
+</script>
+
+</apex:page>
